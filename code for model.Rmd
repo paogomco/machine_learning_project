@@ -1,0 +1,447 @@
+---
+title: "tidycensus"
+author: "Josefina Rodríguez Orellana"
+date: "07-03-2021"
+output: html_document
+---
+
+```{r}
+library(tidycensus)
+library(tidyverse)
+library(glue)
+library(dplyr)
+library(here)
+library(Hmisc)
+library(glmnet)
+
+census_api_key("294056f8026e13298e326dabe95389cb23dd2fad", overwrite  = T)
+
+'%nin%' = Negate('%in%')
+```
+
+```{r load_vars}
+acs_vars <- load_variables(2019, "acs1/subject", cache = TRUE)
+```
+
+```{r acs_data}
+aux1 <- c()
+data <- list()
+i <- 1
+
+
+append_vars <- function(tableID, codes) {
+  aux2 <- c(glue('{tableID}_0{codes}')) 
+  rbind(aux2, aux1)
+}
+
+tablesID <- c(
+            education = "S1501_C02",
+            school_enrollment = "S1401_C02",
+            health_ins     = "S2704_C03",
+            empl_families  = "S2302_C02", #C01 for totals (i.e. not shares)
+            empl_fam_child = "S2302_C04", #C03 for totals (i.e. not shares)
+            unemployment   = "S2301_C04",
+            inc_12m_households = "S1901_C01",
+            households_and_families = "S1101_C01", 
+            commuting_male = "S0801_C02",
+            commuting_female = "S0801_C03",
+            labor_force_rate = "S2301_C02",
+            employment_stability = "S2303_C02", 
+            below_poverty_level = "S1701_C02", # C01for totals, variable in units
+            food_stamps = "S2201_C02",
+            household_size = "S2501_C01", #total units
+            housing_char = "S2504_C02", 
+            connectivity_hosehold = "S2801_C02"
+             )
+
+codes_edu <- c("02", "03", "04", "05", "07", "08", "09", 10:15)
+codes_school_enrollment <- c("02", "03", "04", "05", "06", "07", "08", "09", 10:12, "14","16","18","20", "22","24", "26", "28", "30", "32", "34")
+codes_health <- c("02", "06", 10)
+codes_empl_families <- c(15:17)
+codes_unemployment <- c("01", 22:24, 30)
+codes_median_income_by_type <- c(24:29, 34, 36, 37, 39, 40)
+codes_inc_12m_households <- c("02", "03", "04", "05", "06", "07", "08", "09", 10:13)
+households_and_families <- c("02", "09", 10:13)
+codes_commuting <- c("02", "04", "08", "09", 10:13, 15:17, 37:45)
+codes_labor_force <- c("02", "03", "04", "05", "06", "07", "08", "09", 10:20, 22:30, 32:35)
+codes_employment_stability <- c("02", "03", "04", "05", "06", "07", "09", 10:30, 33)
+codes_below_poverty <- c("02", "03", "04", "05", "06", "07", "08", "09", 10:45)
+codes_food_stamps <- c("02", "03", "09", "23", "24")
+codes_householdsize <- c("02", "03", "04", "05", "06", "07", "08")
+codes_housing_char <-c("02", "03", "04", "05", "06", "07", "08", "09", 10:20, 25:30)
+codes_morgage <- c("02", "03", "04", "05", "06", "07", "08")
+code_connectivity <- c("02","05", "07","09", 11, 12, 19)
+
+vars <- append_vars(tablesID["education"], codes_edu) %>%
+  cbind(append_vars(tablesID["school_enrollment"], codes_school_enrollment),
+        append_vars(tablesID["health_ins"], codes_health),
+        append_vars(tablesID["empl_families"], codes_empl_families),
+        append_vars(tablesID["empl_fam_child"], codes_empl_families),
+        append_vars(tablesID["unemployment"], codes_unemployment),
+        append_vars(tablesID["median_income_by_type"], codes_median_income_by_type),
+        append_vars(tablesID["inc_12m_households"], codes_inc_12m_households),
+        append_vars(tablesID["households_and_families"], households_and_families),
+        append_vars(tablesID["commuting_male"], codes_commuting),
+        append_vars(tablesID["commuting_female"], codes_commuting),
+        append_vars(tablesID["labor_force_rate"], codes_labor_force),
+        append_vars(tablesID["employment_stability"], codes_employment_stability),
+        append_vars(tablesID["below_poverty_level"], codes_below_poverty),
+        append_vars(tablesID["food_stamps"], codes_food_stamps),
+        append_vars(tablesID["household_size"], codes_householdsize),
+        append_vars(tablesID["housing_char"], codes_housing_char),
+        append_vars(tablesID["morgage"], codes_morgage),
+        append_vars(tablesID["connectivity_hosehold"], code_connectivity)
+
+  )
+
+vars_tibble <- vars %>%
+  as_tibble() %>%
+  pivot_longer(cols = V1:last_col(),
+               names_to = "variable",
+               values_to = "code") 
+
+  
+years <- c(2017, 2018, 2019)
+
+#Eliminating NAs
+vars <- vars[vars %nin% grep("NA_0", vars, value=T, perl=T)]
+
+#Downloading acs data
+for (y in years) {
+ data[[i]] <- get_acs(
+   geography = "congressional district",
+   variables = vars,
+   survey = "acs1",
+   year = y,
+   geometry = "false") %>%
+   dplyr::select(-moe) %>%
+   mutate(year = y) %>%
+   pivot_wider(names_from  = "variable",
+               values_from = "estimate")
+ 
+i = i + 1
+  
+}
+
+
+acs_data <- rbind(data[[1]], data[[2]], data[[3]]) %>%
+  rename("percent_medicaid" = "S2704_C03_006")
+
+
+#remove what we dont need
+rm(data, aux1, i, vars)
+``` 
+
+
+```{r TW_data}
+library(tidyverse)
+library(dplyr)
+#Obtained from: https://americanideologyproject.com/
+#cite: Tausanovitch, Chris, and Christopher Warshaw, 2013. “Measuring Constituent Policy Preferences in Congress, State Legislatures, and Cities.” The Journal of Politics 75 (2): 330-342.
+path <- "C:\\Josefina\\Chicago\\6 WINTER 2021\\Introduction to Machine Learning\\Project\\ML_project\\"
+TW_data <- read_csv(paste0(path, "cd_113_TW_ideology_estimates.csv")) %>%
+  select(cd_fips, abb, state, mrp_mean) %>%
+  filter(!is.na(cd_fips)) %>%
+  mutate(cd_fips =  as.character(cd_fips),
+         cd_fips = ifelse(str_length(cd_fips) == 3, paste0("0", cd_fips), cd_fips))
+
+vars_TW <- tibble(code = colnames(TW_data),
+                  label = ifelse(code == "cd_fips", "FIPS codes for Congressional Districts",
+                                 ifelse(code == "abb", "State abbreviation",
+                                        ifelse(code == "state", "State",
+                                               "Measured Constituency Preference (MRP)-based estimate of the mean ideology of each district"))),
+                  variable = code)
+
+
+```
+
+```{r}
+
+data_for_model <- acs_data %>%
+  left_join(TW_data, by = c("GEOID" = "cd_fips")) %>%
+  rename("state_abb" = "abb")
+```
+
+
+```{r dictionary}
+
+
+data_dictionary <- load_variables(2019, "acs1/subject", cache = TRUE) %>%
+  filter(name %in% vars_tibble$code) %>%
+  rename("code" = "name") %>%
+  left_join(vars_tibble, by = "code") %>%
+  dplyr::select(-concept) %>%
+  mutate(label = str_remove(label, "Estimate!!"),
+         label = str_replace_all(label, "!!", " - "),
+         label = str_replace(label, "Households - Total", "Nr. Households with Income"),
+         label = str_remove(label, "Total - HOUSEHOLDS - "),
+         label = str_remove(label, "Total households - SELECTED HOUSEHOLDS BY TYPE - "),
+         label = str_remove(label, "Population for whom poverty status is determined -"),
+         label = str_remove(label, "THE FOLLOWING POVERTY RATIOS -"),
+         label = str_remove(label, "- Occupied housing units"),
+         label = str_remove(label, "USUAL HOURS WORKED -"),
+         label = str_remove(label, "WEEKS WORKED -"),
+         label = str_remove(label, "COVERAGE ALONE OR IN COMBINATION -"),
+         label = str_replace(label, "S2704_C03_002", "Percent Medicare")) %>%
+  rbind(vars_TW,
+        tibble(code = "percent_medicaid",
+               label = "Percent of congressional district residents on medicaid",
+               variable = code))
+  
+
+```
+
+```{r}
+library(fastDummies)
+data_for_model$state <- NULL
+data_for_model <- data_for_model %>% dummy_cols(select_columns = "state_abb", remove_first_dummy=T, remove_selected_columns = T)
+
+##Looking at the data
+skimr::skim(data_for_model)
+
+#Removing columns with only missing data
+drop_mv <- c("S1701_C02_038", "S1701_C02_039", "S1701_C02_040", "S1701_C02_041", "S1701_C02_042", "S1701_C02_043", "S1701_C02_044", "S1701_C02_045")
+data_for_model <- data_for_model %>% dplyr::select(-drop_mv)
+
+
+#Creating dummies for missing values
+data_for_model <- data_for_model %>%
+  mutate(across(all_of(names(data_for_model)), ~ +(is.na(.)), .names = "{col}_mv"))
+
+#Eliminating columns where all observations have the same value
+data_for_model <- data_for_model %>% dplyr::select(where(~length(unique(.)) > 1))
+names(data_for_model)
+
+
+# Replacing NAs with zero: these are variables of race, that can be infer that have NAs because there are no people of that race in the district 
+data_for_model <- data_for_model %>% mutate_all(~replace(., is.na(.), 0))
+
+
+### PREDICTORS
+
+#dummy vars
+x_mv_dummy <- grep("_mv", names(data_for_model), perl=T, value=T)
+x_state_dummy <- grep("state_abb", names(data_for_model), perl=T, value=T)
+
+#This variables were shooting the model so we applied a log to run a more feasible model 
+x_logs <- c("S2501_C01_002", "S2501_C01_003", "S2501_C01_004", "S2501_C01_005","S2501_C01_006", "S2501_C01_007", "S2501_C01_008")
+
+#Other continuous features
+x_cont <- names(data_for_model)[names(data_for_model) %nin% x_mv_dummy]
+x_cont <- x_cont[x_cont %nin% x_logs]
+x_cont <- x_cont[x_cont %nin% x_state_dummy]
+x_cont <- x_cont[-c(1:3)]
+x_cont <- x_cont[-233] #eliminates medicaid of year t from predictors, because it is the outcome
+
+# continuous features squared and cubed
+data_for_model <- data_for_model %>%
+  mutate(across(all_of(x_cont), ~ .^2, .names = "{col}_2")) %>%
+  mutate(across(all_of(x_cont), ~ .^3, .names = "{col}_3")) %>%
+  mutate(across(all_of(x_logs), ~ log(1+.),))
+x_cont_2 <- paste0(x_cont, "_2")
+x_cont_3 <- paste0(x_cont, "_3")
+
+#Removing variables with constant values in train
+drop_train_const <-  c("S2301_C02_016", "S2301_C02_016_2" ,"S2301_C02_016_3", "S1701_C02_020_mv", "S2301_C02_016_mv", "S2301_C02_020_mv", "state_abb_DE", "state_abb_HI", "state_abb_ID", "state_abb_ME"  , "state_abb_MT", "state_abb_VT","state_abb_WY")
+x_cont <- x_cont[x_cont %nin% drop_train_const]
+x_cont_2 <- x_cont_2[x_cont_2 %nin% drop_train_const]
+x_cont_3 <- x_cont_3[x_cont_3 %nin% drop_train_const]
+x_logs <- x_logs[x_logs %nin% drop_train_const]
+x_mv_dummy <- x_mv_dummy[x_mv_dummy %nin% drop_train_const]
+x_state_dummy <- x_state_dummy[x_state_dummy %nin% drop_train_const]
+
+##Generate target variable percent medicaid of year t
+data_for_model <- data_for_model %>%
+    mutate(y = percent_medicaid) 
+
+```
+
+```{r lasso}
+
+##Split de la data
+#two samples: contemporary and extra-temporary (oot)
+#with our oot we will see if the model trained and tested with years t-2 and t-1 apply for year t as well
+oot <- data_for_model %>% filter(year == 2019) # test out of time
+temp <- data_for_model %>% filter(year == 2017|year==2018) # train and test
+
+
+##Fitting the model for lasso, selecting variables that need to be in the model 
+x_list <- c(x_cont, 
+            x_cont_2,
+            x_cont_3,
+            x_logs,
+            x_mv_dummy,
+            x_state_dummy)
+
+
+# traditional split data for contemporary data (2017 and 2018)
+set.seed (123)
+train= sample(1:nrow(temp), nrow(temp)*4/5)
+test=(-train)
+
+# Lasso requires scaling the variables, so that every variable weights the same for regularization purposes. Only with train data because you cannot scale with data that you actually do not know
+
+means <- temp[train, ] %>% 
+  as_tibble() %>% 
+  summarise(across(all_of(x_list), ~ mean(.x, na.rm = T)))
+sds <- temp[train, ] %>% 
+  as_tibble() %>% 
+  summarise(across(all_of(x_list), ~ sd(.x, na.rm = T)))
+
+scale_df <- function(table, means, sds){
+ #repeating rows so they have the same size of the wanted table 
+  means <- means %>%
+    mutate(count = nrow(table)) %>%
+    uncount(count)
+  
+  sds <- sds %>%
+    mutate(count = nrow(table)) %>%
+    uncount(count) 
+  #We are just selecting the variables that we have in our means calculations 
+  aux1 <- table[,names(means)] 
+  
+  #standarize
+  aux1 <- (aux1 - means)/sds
+  #select column not used in standarization 
+  table <- table[,names(table)[names(table) %nin% names(means)]] 
+  #bind former table with standarized table to achive table with the same structure
+  result <- bind_cols(table, aux1) 
+  
+  return(result)
+}
+
+#Appliying the function for all tables, using means and sds of train sample 
+temp_sc <- scale_df(table=temp, means=means, sds=sds)
+oot_sc <- scale_df(table=oot, means=means, sds=sds)
+```
+
+
+
+```{r lasso cv}
+library(glmnet)
+#Doing a CV 
+set.seed (123)
+cv.out<-cv.glmnet(as.matrix(temp_sc[train , x_list]),
+                  temp_sc[train, ]$y,
+                  alpha=1)
+
+#MSE path graph
+plot(cv.out)
+
+#Lasso path
+plot(cv.out$glmnet.fit, 
+     "lambda", label=FALSE)
+
+bestlam=cv.out$lambda.min
+
+#predict with train, test, and oot
+temp_sc$yhat=predict(cv.out,s=bestlam ,newx=as.matrix(temp_sc[, x_list]))
+oot_sc$yhat=predict(cv.out,s=bestlam ,newx=as.matrix(oot_sc[, x_list]))
+
+temp_sc$sample = "train"
+temp_sc[test, "sample"] = "test"
+
+temp_sc <- temp_sc %>% mutate(se = (yhat - y)^2, st = (y - mean(temp_sc$y))^2) 
+oot_sc <- oot_sc %>% mutate(se = (yhat - y)^2, st = (y - mean(oot_sc$y))^2) 
+
+#performance metrics 
+mse_result <- rbind(temp_sc %>% 
+                      group_by(sample) %>% 
+                      summarise(mse = mean(se), sse = sum(se), sst= sum(st)), 
+                    oot_sc %>% 
+                      mutate(sample = "oot") %>% 
+                      group_by(sample) %>% 
+                      summarise(mse = mean(se), sse = sum(se), sst= sum(st)))
+
+mse_result$r2 <- 1 - mse_result$sse/mse_result$sst  
+
+lasso.coef = predict(cv.out,type="coefficients",s=bestlam)
+lasso.coef
+
+coef.report<- data.frame(x_vars = c("Intercept", lasso.coef@Dimnames[[1]][lasso.coef@i]),
+                         coefs = lasso.coef@x)
+intercept <- coef.report[1,2]
+
+
+coef_bar <- ggplot(coef.report %>% filter(x_vars != "Intercept"))
+coef_bar <- coef_bar + geom_bar(aes(x = reorder(x_vars, -coefs), y = coefs), 
+                                stat = "identity", fill = "#1E90FF") +
+  theme(axis.text.x = element_text(vjust=1, size=10, angle=45))
+
+#Coefficient importance
+coef_bar
+
+#Merging the data of predictions to compare outcome of prediction with original outcome (percent_medicaid)
+oot_sc$sample = "oot"
+total_predict <- rbind(temp_sc, oot_sc)
+
+#Merging predictions with original data frame (data_for_model)
+compare<- data_for_model%>%
+  group_by(GEOID, year)%>%
+  select(GEOID, year, percent_medicaid)
+
+
+
+  joint_data <- left_join(x = compare,
+                          y = total_predict[c("year","yhat", "GEOID")],
+                          by = c("year", "GEOID"), all.x = T) %>% 
+  #taking accuracy estimates from https://link.springer.com/article/10.1057/jors.2014.103
+    mutate(accu_level= as.numeric(((percent_medicaid-yhat)/percent_medicaid))*100)%>%
+    #we decided that we are going to accept a range of 5% in accuracy, so every actual value that is =<5 to the predeicted one we are define it is equal, we calculate a column where we see which ones are equal (accu) and take the value of 1 
+    mutate(accu1 = as.factor(ifelse(accu_level <= abs(1), 1, 0)),
+           accu2 = as.factor(ifelse(accu_level <= abs(2.5), 1, 0)),
+           accu5 =as.factor(ifelse(accu_level <= abs(5), 1, 0)))
+
+
+accuracy_oot1 <- joint_data %>%
+  filter(year == 2019) %>%
+  select(accu1) %>%
+  filter(accu1 == 1) %>%
+  ungroup() %>%
+  count(n())
+accuracy_oot2 <- joint_data %>%
+  filter(year == 2019) %>%
+  select(accu2) %>%
+  filter(accu2 == 1) %>%
+  ungroup() %>%
+  count(n())
+accuracy_oot5 <- joint_data %>%
+  filter(year == 2019) %>%
+  select(accu5) %>%
+  filter(accu5 == 1) %>%
+  ungroup() %>%
+  count(n())
+
+#For accuracy of the model
+accuracy_oot1[2][1]/437 #43% accuracy
+accuracy_oot2[2][1]/437 #51% accuracy
+accuracy_oot5[2][1]/437 #60% accuracy
+
+#Histogram to show predicted vs actual in 2019
+label1 <- tibble(percent_medicaid = c(35),
+                density = c(0.07),
+                text = c("Actual"))
+label2 <- tibble(percent_medicaid = c(35),
+                density = c(0.06),
+                text = c("Predicted"))
+
+total_predict %>%
+  filter(year == 2019) %>%
+  ggplot() +
+  geom_density(aes(x = percent_medicaid), fill = "red") +
+  geom_density(aes(x = yhat, alpha=0.3), fill = "black") +
+  geom_text(aes(x = percent_medicaid, y = density, label = text),
+            data = label1, vjust = "top", hjust = "left", color = "red") +
+  geom_text(aes(x = percent_medicaid, y = density, label = text),
+            data = label2, vjust = "top", hjust = "left") +
+  labs(title = "2019 Percentage Share of Population on Medicaid per Congressional District",
+       subtitle = "Actual vs Predicted") +
+   xlab("% Share of Population on Medicaid") +
+   ylab("Density") +
+   theme(plot.title = element_text(hjust = 0.5),
+         plot.subtitle = element_text(hjust = 0.5),
+         legend.position = "none")
+
+
+  
+```
